@@ -1,0 +1,5 @@
+pymongo
+google-auth
+google-auth-oauthlib
+requests
+Pillow

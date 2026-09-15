@@ -6,24 +6,64 @@ from tkinter import font as tkfont
 
 from engine import GameEngine
 import constants as C
+import database
 
 
 class BlackjackGUI(tk.Tk):
-    def __init__(self):
+    def __init__(self, user_id, start_fullscreen=False):
         super().__init__()
-        self.title("Blackjack")
+        self.title("Mafia Blackjack")
         self.configure(bg=C.FELT_DARK)
         self.resizable(False, False)
 
-        self.engine = GameEngine()
+        self.user_id = user_id
+        starting_balance = database.get_balance(user_id)
+        self.engine = GameEngine(starting_balance=starting_balance)
+        self.go_to_menu = False  # main.py checks this after mainloop exits
+        self._is_fullscreen = False
 
         self.card_font = tkfont.Font(family="Georgia", size=20, weight="bold")
         self.suit_font = tkfont.Font(size=28)
         self.label_font = tkfont.Font(family="Helvetica", size=13, weight="bold")
         self.status_font = tkfont.Font(family="Helvetica", size=16, weight="bold")
 
+        self._build_window_controls()
         self._build_layout()
         self._redraw()
+
+        if start_fullscreen:
+            self._is_fullscreen = True
+            self.attributes("-fullscreen", True)
+
+        self._bring_to_front()
+
+    def _bring_to_front(self):
+        """Guards against the window opening minimized/unfocused on some OSes."""
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(50, lambda: self.attributes("-topmost", False))
+        self.focus_force()
+
+    # ----- fullscreen / minimize -----
+
+    def _build_window_controls(self):
+        self.bind("<F11>", lambda e: self._toggle_fullscreen())
+        self.bind("<Escape>", lambda e: self._exit_fullscreen())
+
+    def _toggle_fullscreen(self):
+        self._is_fullscreen = not self._is_fullscreen
+        self.attributes("-fullscreen", self._is_fullscreen)
+
+    def _exit_fullscreen(self):
+        self._is_fullscreen = False
+        self.attributes("-fullscreen", False)
+
+    def _on_menu_click(self):
+        database.set_balance(self.user_id, self.engine.balance)
+        self.go_to_menu = True
+        self.destroy()
 
     # ----- layout -----
 
@@ -31,10 +71,23 @@ class BlackjackGUI(tk.Tk):
         top = tk.Frame(self, bg=C.FELT_DARK)
         top.pack(fill="x", padx=10, pady=(10, 0))
 
+        tk.Button(
+            top, text="☰ Menu", font=self.label_font, bg="#333333", fg="white",
+            relief="flat", command=self._on_menu_click
+        ).pack(side="left")
+
         self.balance_label = tk.Label(
             top, text="", font=self.label_font, bg=C.FELT_DARK, fg=C.GOLD
         )
-        self.balance_label.pack(side="left")
+        self.balance_label.pack(side="right", padx=(0, 10))
+        tk.Button(
+            top, text="🗕", font=self.label_font, bg="#333333", fg="white",
+            relief="flat", width=3, command=self.iconify
+        ).pack(side="right", padx=4)
+        tk.Button(
+            top, text="⛶", font=self.label_font, bg="#333333", fg="white",
+            relief="flat", width=3, command=self._toggle_fullscreen
+        ).pack(side="right", padx=4)
 
         self.status_label = tk.Label(
             self, text="Place your bet to start", font=self.status_font,
@@ -164,6 +217,7 @@ class BlackjackGUI(tk.Tk):
     def _after_round(self):
         self.hit_btn.config(state="disabled")
         self.stand_btn.config(state="disabled")
+        database.set_balance(self.user_id, self.engine.balance)
         if self.engine.is_game_over:
             self.status_label.config(text="Out of chips — game over")
             self.deal_btn.config(state="disabled")
