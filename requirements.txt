@@ -3,3 +3,4 @@ google-auth
 google-auth-oauthlib
 requests
 Pillow
+python-dotenv

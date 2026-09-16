@@ -13,3 +13,11 @@ CANVAS_WIDTH = 760
 CANVAS_HEIGHT = 420
 
 BET_CHIPS = (10, 25, 50, 100)
+
+# ----- Loan / boss mechanic -----
+BASE_LOAN_TARGET = 1000
+BASE_LOAN_ROUNDS = 8
+MIN_LOAN_ROUNDS = 3
+
+# ----- Table difficulty -----
+MAX_NPCS = 3

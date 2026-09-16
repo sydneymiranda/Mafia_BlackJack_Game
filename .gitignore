@@ -24,5 +24,7 @@ dist/
 credentials.json
 token.json
 session.json
+.session_secret
+.env
 *.db
 

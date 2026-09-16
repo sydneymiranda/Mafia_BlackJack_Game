@@ -11,10 +11,17 @@ Setup required (one-time, see SETUP.md):
 
 token.json / session.json are local cache files (gitignored) so the
 player isn't forced to re-approve or re-pick guest/google every launch.
+session.json is HMAC-signed (see _sign) so editing it by hand to swap
+in a different user_id is detected and rejected rather than silently
+letting someone hijack another local account.
 """
 
+import hashlib
+import hmac
 import json
 import os
+import re
+import secrets
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -31,10 +38,26 @@ SCOPES = [
 CREDENTIALS_FILE = "credentials.json"
 TOKEN_FILE = "token.json"
 SESSION_FILE = "session.json"
+SECRET_KEY_FILE = ".session_secret"
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MIN_PASSWORD_LENGTH = 8
 
 
 class AuthError(Exception):
     pass
+
+
+# ----- input validation -----
+
+def _validate_email(email):
+    if not email or not EMAIL_PATTERN.match(email):
+        raise AuthError("Enter a valid email address.")
+
+
+def _validate_password_strength(password):
+    if not password or len(password) < MIN_PASSWORD_LENGTH:
+        raise AuthError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
 
 
 # ----- Google OAuth -----
@@ -88,6 +111,10 @@ def _try_refresh_google_session():
 # ----- Local email/password accounts -----
 
 def local_sign_up(email, name, password):
+    email = email.strip().lower()
+    _validate_email(email)
+    _validate_password_strength(password)
+
     user_id = database.create_local_user(email, name, password)
     if user_id is None:
         raise AuthError("An account with that email already exists.")
@@ -96,9 +123,12 @@ def local_sign_up(email, name, password):
 
 
 def local_sign_in(email, password):
-    user_id = database.verify_local_login(email, password)
+    email = email.strip().lower()
+    _validate_email(email)
+
+    user_id, error = database.verify_local_login(email, password)
     if user_id is None:
-        raise AuthError("Incorrect email or password.")
+        raise AuthError(error or "Incorrect email or password.")
     _save_session({"auth_type": "local", "user_id": user_id})
     return user_id
 
@@ -111,11 +141,29 @@ def create_guest():
     return user_id, expires_at
 
 
-# ----- Session persistence -----
+# ----- Session persistence (HMAC-signed, tamper-evident) -----
+
+def _get_or_create_secret():
+    if os.path.exists(SECRET_KEY_FILE):
+        with open(SECRET_KEY_FILE) as f:
+            return bytes.fromhex(f.read().strip())
+    key = secrets.token_bytes(32)
+    with open(SECRET_KEY_FILE, "w") as f:
+        f.write(key.hex())
+    return key
+
+
+_SECRET_KEY = _get_or_create_secret()
+
+
+def _sign(payload):
+    return hmac.new(_SECRET_KEY, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
 
 def _save_session(data):
+    payload = json.dumps(data, sort_keys=True)
     with open(SESSION_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump({"data": data, "sig": _sign(payload)}, f)
 
 
 def clear_session():
@@ -132,13 +180,22 @@ def delete_account(user_id):
 
 
 def load_saved_session():
-    """Returns a user_id if a still-valid session exists locally, else None."""
+    """Returns a user_id if a still-valid, untampered session exists locally,
+    else None. A session.json that's been hand-edited fails the signature
+    check and is discarded rather than trusted."""
     if not os.path.exists(SESSION_FILE):
         return None
     try:
         with open(SESSION_FILE) as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
+            envelope = json.load(f)
+        data = envelope["data"]
+        sig = envelope["sig"]
+    except (json.JSONDecodeError, OSError, KeyError):
+        return None
+
+    expected_sig = _sign(json.dumps(data, sort_keys=True))
+    if not hmac.compare_digest(sig, expected_sig):
+        clear_session()  # tampered or corrupted — don't trust it
         return None
 
     user_id = data.get("user_id")
